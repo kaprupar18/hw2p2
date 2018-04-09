@@ -11,7 +11,7 @@ include_directories(SYSTEM ${MPI_INCLUDE_PATH})
 
 set(CMAKE_NVCC_COMPILER nvcc)
 
-set(CUDA_NVCC_FLAGS -O3 -gencode arch=compute_37,code=sm_37)
+set(CUDA_NVCC_FLAGS -O3 -g -gencode arch=compute_37,code=sm_37)
 
 set(HEADERS
     common.h
@@ -23,7 +23,7 @@ set(SOURCES
 )
 
 CUDA_ADD_EXECUTABLE(matrix ${HEADERS} matrix.cu common.cu ${CUDA_LIBRARIES})
-target_link_libraries( matrix)
+target_link_libraries(matrix)
 
 CUDA_ADD_EXECUTABLE(serial ${HEADERS} serial.cu common.cu ${CUDA_LIBRARIES})
 target_link_libraries( serial)
