@@ -29,6 +29,14 @@ typedef struct
   double ay;
 } particle_t;
 
+typedef struct 
+{
+	bool Left;
+	bool Right;
+	bool Top;
+	bool Bottom;
+} Bin_Location_t;
+
 //
 //  timing routines
 //

@@ -48,7 +48,20 @@ __global__ void compute_forces_gpu(particle_t * particles, int n)
 }
 */
 
-__global__ void compute_forces_gpu( particle_t &particles, int n, int &bins, int &particlesInBin, double binsize ){
+__device__ Bin_Location_t getBinLocation(const int BinIndex, const int NumofBinsEachSide, const int NumofBins )
+{ // assumes square geomerty!
+
+    Bin_Location_t Temp; 
+
+    Temp.Left = ((BinIndex%NumofBinsEachSide) == 0) ? true : false;
+    Temp.Right = ((BinIndex%NumofBinsEachSide) == (NumofBinsEachSide-1) ) ? true : false;
+    Temp.Top =  ((BinIndex < NumofBinsEachSide) )? true : false;
+    Temp.Bottom = ((BinIndex > (NumofBins - NumofBinsEachSide - 1) ) )? true : false;
+
+    return Temp; 
+}
+
+__global__ void compute_forces_gpu( particle_t &particles, int n, int &bins, int &binStartsAt, double binsize, int NumofBinsEachSide ){
 
     /*
         "particles" contains actual particles(structures)
@@ -57,6 +70,8 @@ __global__ void compute_forces_gpu( particle_t &particles, int n, int &bins, int
         "n" is the number of particles in "particles"
         "binsize" is maximum binsize in 1-D (geometric-distance-wise) = cutoff
     */
+
+    // each block computed each bin
 
     // each block computes a bin using 8 neighbors in a common case
 
@@ -74,58 +89,302 @@ __global__ void compute_forces_gpu( particle_t &particles, int n, int &bins, int
     __shared__ particle_t southWestBin[n/2];
 
     // each thread handles a particle
-    int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    int tidx = threadIdx.x + blockIdx.x * blockDim.x;
+    int tidy = threadIdx.y + blockIdx.y * blockDim.y;
 
+    // compute Bin indices
+    int currentBinId = blockIdx * NumofBinsEachSide + blockIdy;
+    int nId = (blockIdx - 1) * NumofBinsEachSide + blockIdy;
+    int sId = (blockIdx + 1) * NumofBinsEachSide + blockIdy;
+    int eId = blockIdx * NumofBinsEachSide + blockIdy + 1;
+    int wId = blockIdx * NumofBinsEachSide + blockIdy - 1;
+    int neId = (blockIdx - 1) * NumofBinsEachSide + blockIdy + 1;
+    int nwId = (blockIdx - 1) * NumofBinsEachSide + blockIdy - 1;
+    int seId = (blockIdx + 1) * NumofBinsEachSide + blockIdy + 1;
+    int swId = (blockIdx + 1) * NumofBinsEachSide + blockIdy - 1;
+
+    // get Bin Location on grid
+    Bin_Location_t Location = getBinLocation(currentBinId, NumofBinsEachSide, NumofBinsEachSide*NumofBinsEachSide);
+
+    // get particles in current bin
+    int particleIndex;
+    for( int p=binStartsAt[currentBinId], store=0; p < binStartsAt[currentBinId+1]; ++p, ++store ){
+        particleIndex = bins[p];
+        currentBin[store] = particles[particleIndex];   // gives particles of current bin
+    }
+
+    int particleIndex;
+    
     // we are not at an edge or a corner. -- Most common case
     if( (Location.Left | Location.Right | Location.Top | Location.Bottom) == false){
-        
+        // get 8 neighbors
+
+        // N
+        for( int p=binStartsAt[nId], store=0; p < binStartsAt[nId+1]; ++p, ++store ){
+            particleIndex = bins[p];
+            northBin[store] = particles[particleIndex];   // gives particles of current bin
+        }
+
+        // S
+        for( int p=binStartsAt[sId], store=0; p < binStartsAt[sId+1]; ++p, ++store ){
+            particleIndex = bins[p];
+            southBin[store] = particles[particleIndex];   // gives particles of current bin
+        }
+
+        // W
+        for( int p=binStartsAt[wId], store=0; p < binStartsAt[wId+1]; ++p, ++store ){
+            particleIndex = bins[p];
+            westBin[store] = particles[particleIndex];   // gives particles of current bin
+        }
+
+        // E
+        for( int p=binStartsAt[eId], store=0; p < binStartsAt[eId+1]; ++p, ++store ){
+            particleIndex = bins[p];
+            eastBin[store] = particles[particleIndex];   // gives particles of current bin
+        }
+
+        // NW
+        for( int p=binStartsAt[nwId], store=0; p < binStartsAt[nwId+1]; ++p, ++store ){
+            particleIndex = bins[p];
+            northWestBin[store] = particles[particleIndex];   // gives particles of current bin
+        }
+
+        // NE
+        for( int p=binStartsAt[neId], store=0; p < binStartsAt[neId+1]; ++p, ++store ){
+            particleIndex = bins[p];
+            northEastBin[store] = particles[particleIndex];   // gives particles of current bin
+        }
+
+        // SE
+        for( int p=binStartsAt[seId], store=0; p < binStartsAt[seId+1]; ++p, ++store ){
+            particleIndex = bins[p];
+            southEastBin[store] = particles[particleIndex];   // gives particles of current bin
+        }
+
+        // SW
+        for( int p=binStartsAt[swId], store=0; p < binStartsAt[swId+1]; ++p, ++store ){
+            particleIndex = bins[p];
+            southWestBin[store] = particles[particleIndex];   // gives particles of current bin
+        }
     }
     // Top Row
     else if( Location.Top ){
+
+        // S
+        for( int p=binStartsAt[sId], store=0; p < binStartsAt[sId+1]; ++p, ++store ){
+            particleIndex = bins[p];
+            southBin[store] = particles[particleIndex];   // gives particles of current bin
+        }
+
         // most common case for the top row -- Not in a corner.
-        if( (Location.Left | Location.Right) == false){
-                    //printf("Top Row %d \n", BinIndex );
- 
+        if( (Location.Left | Location.Right) == false ){
+            // get 4 bins: W, E, SW, SE
+
+            // W
+            for( int p=binStartsAt[wId], store=0; p < binStartsAt[wId+1]; ++p, ++store ){
+                particleIndex = bins[p];
+                westBin[store] = particles[particleIndex];   // gives particles of current bin
+            }
+
+            // E
+            for( int p=binStartsAt[eId], store=0; p < binStartsAt[eId+1]; ++p, ++store ){
+                particleIndex = bins[p];
+                eastBin[store] = particles[particleIndex];   // gives particles of current bin
+            }
+
+            // SE
+            for( int p=binStartsAt[seId], store=0; p < binStartsAt[seId+1]; ++p, ++store ){
+                particleIndex = bins[p];
+                southEastBin[store] = particles[particleIndex];   // gives particles of current bin
+            }
+
+            // SW
+            for( int p=binStartsAt[swId], store=0; p < binStartsAt[swId+1]; ++p, ++store ){
+                particleIndex = bins[p];
+                southWestBin[store] = particles[particleIndex];   // gives particles of current bin
+            }
+
         }
         else if( (!Location.Left) && Location.Right ){
-                    //printf("Top Row Right %d \n", BinIndex );
-                    // Right == East
+            // get 2 bins: W, SW
+
+            // W
+            for( int p=binStartsAt[wId], store=0; p < binStartsAt[wId+1]; ++p, ++store ){
+                particleIndex = bins[p];
+                westBin[store] = particles[particleIndex];   // gives particles of current bin
+            }
+
+            // SW
+            for( int p=binStartsAt[swId], store=0; p < binStartsAt[swId+1]; ++p, ++store ){
+                particleIndex = bins[p];
+                southWestBin[store] = particles[particleIndex];   // gives particles of current bin
+            }
 
         }
         else if ( Location.Left && (!Location.Right) ){
-                    //printf("Top Row Left %d \n", BinIndex );
+            // get 2 bins: E, SE
+
+            // E
+            for( int p=binStartsAt[eId], store=0; p < binStartsAt[eId+1]; ++p, ++store ){
+                particleIndex = bins[p];
+                eastBin[store] = particles[particleIndex];   // gives particles of current bin
+            }
+
+            // SE
+            for( int p=binStartsAt[seId], store=0; p < binStartsAt[seId+1]; ++p, ++store ){
+                particleIndex = bins[p];
+                southEastBin[store] = particles[particleIndex];   // gives particles of current bin
+            }
 
         }
 
     }
     else if( Location.Bottom ){
+
+        // N
+        for( int p=binStartsAt[nId], store=0; p < binStartsAt[nId+1]; ++p, ++store ){
+            particleIndex = bins[p];
+            northBin[store] = particles[particleIndex];   // gives particles of current bin
+        }
+
         // most common case for the top row -- Not in a corner.
         if((Location.Left | Location.Right) == false){
-                    //printf("Bottom Row %d \n", BinIndex );
+            // get 4 bins: W, E, NW, NE
+
+            // W
+            for( int p=binStartsAt[wId], store=0; p < binStartsAt[wId+1]; ++p, ++store ){
+                particleIndex = bins[p];
+                westBin[store] = particles[particleIndex];   // gives particles of current bin
+            }
+
+            // E
+            for( int p=binStartsAt[eId], store=0; p < binStartsAt[eId+1]; ++p, ++store ){
+                particleIndex = bins[p];
+                eastBin[store] = particles[particleIndex];   // gives particles of current bin
+            }
+
+            // NW
+            for( int p=binStartsAt[nwId], store=0; p < binStartsAt[nwId+1]; ++p, ++store ){
+                particleIndex = bins[p];
+                northWestBin[store] = particles[particleIndex];   // gives particles of current bin
+            }
+
+            // NE
+            for( int p=binStartsAt[neId], store=0; p < binStartsAt[neId+1]; ++p, ++store ){
+                particleIndex = bins[p];
+                northEastBin[store] = particles[particleIndex];   // gives particles of current bin
+            }
 
         }
         else if( (!Location.Left) && Location.Right ){
-                    // Right == East
-                    //printf("Bottom Row Right %d \n", BinIndex );
+            // get 2 bins: W, NW
+
+            // W
+            for( int p=binStartsAt[wId], store=0; p < binStartsAt[wId+1]; ++p, ++store ){
+                particleIndex = bins[p];
+                westBin[store] = particles[particleIndex];   // gives particles of current bin
+            }
+
+            // NW
+            for( int p=binStartsAt[nwId], store=0; p < binStartsAt[nwId+1]; ++p, ++store ){
+                particleIndex = bins[p];
+                northWestBin[store] = particles[particleIndex];   // gives particles of current bin
+            }
 
         }
         else if( Location.Left && (!Location.Right) ){
-                    //printf("Bottom Row Left %d ", BinIndex );
+            // get 2 bins: E, NE
+
+            // E
+            for( int p=binStartsAt[eId], store=0; p < binStartsAt[eId+1]; ++p, ++store ){
+                particleIndex = bins[p];
+                eastBin[store] = particles[particleIndex];   // gives particles of current bin
+            }
+
+            // NE
+            for( int p=binStartsAt[neId], store=0; p < binStartsAt[neId+1]; ++p, ++store ){
+                particleIndex = bins[p];
+                northEastBin[store] = particles[particleIndex];   // gives particles of current bin
+            }
 
         }
 
     }
     else if(Location.Left){
-                //printf("Left %d \n", BinIndex );
+        // get 5 bins: N, S, E, NE, SE
+
+        // N
+        for( int p=binStartsAt[nId], store=0; p < binStartsAt[nId+1]; ++p, ++store ){
+            particleIndex = bins[p];
+            northBin[store] = particles[particleIndex];   // gives particles of current bin
+        }
+
+        // S
+        for( int p=binStartsAt[sId], store=0; p < binStartsAt[sId+1]; ++p, ++store ){
+            particleIndex = bins[p];
+            southBin[store] = particles[particleIndex];   // gives particles of current bin
+        }
+
+        // E
+        for( int p=binStartsAt[eId], store=0; p < binStartsAt[eId+1]; ++p, ++store ){
+            particleIndex = bins[p];
+            eastBin[store] = particles[particleIndex];   // gives particles of current bin
+        }
+
+        // NE
+        for( int p=binStartsAt[neId], store=0; p < binStartsAt[neId+1]; ++p, ++store ){
+            particleIndex = bins[p];
+            northEastBin[store] = particles[particleIndex];   // gives particles of current bin
+        }
+
+        // SE
+        for( int p=binStartsAt[seId], store=0; p < binStartsAt[seId+1]; ++p, ++store ){
+            particleIndex = bins[p];
+            southEastBin[store] = particles[particleIndex];   // gives particles of current bin
+        }
 
     }
     else if(Location.Right){
-                //printf("Right %d \n", BinIndex );
+        // get 5 bins: N, S, W, NW, SW
+
+        // N
+        for( int p=binStartsAt[nId], store=0; p < binStartsAt[nId+1]; ++p, ++store ){
+            particleIndex = bins[p];
+            northBin[store] = particles[particleIndex];   // gives particles of current bin
+        }
+
+        // S
+        for( int p=binStartsAt[sId], store=0; p < binStartsAt[sId+1]; ++p, ++store ){
+            particleIndex = bins[p];
+            southBin[store] = particles[particleIndex];   // gives particles of current bin
+        }
+
+        // W
+        for( int p=binStartsAt[wId], store=0; p < binStartsAt[wId+1]; ++p, ++store ){
+            particleIndex = bins[p];
+            westBin[store] = particles[particleIndex];   // gives particles of current bin
+        }
+
+        // NW
+        for( int p=binStartsAt[nwId], store=0; p < binStartsAt[nwId+1]; ++p, ++store ){
+            particleIndex = bins[p];
+            northWestBin[store] = particles[particleIndex];   // gives particles of current bin
+        }
+
+        // SW
+        for( int p=binStartsAt[swId], store=0; p < binStartsAt[swId+1]; ++p, ++store ){
+            particleIndex = bins[p];
+            southWestBin[store] = particles[particleIndex];   // gives particles of current bin
+        }
 
     }
     else{
         printf("Getting another bin case\n");
     }
+    ///////////// Bins with particles READY! ///////////////////
+
+
+
 
 }
 
@@ -209,7 +468,9 @@ int main( int argc, char **argv )
     cudaThreadSynchronize();
     copy_time = read_timer( ) - copy_time;
 
-    
+    int* particlesInBin = (int*) malloc( sizeof(int) * NumofBins );
+    int* binStartsAt = (int*) malloc( sizeof(int) * NumofBins );
+
     //
     //  simulate a number of time steps
     //
@@ -237,10 +498,12 @@ int main( int argc, char **argv )
         /// Beginning conversion from STL to primitives ///
 
         // Find number of particles in each bin
-        int* particlesInBin = (int*) malloc( sizeof(int) * NumofBins );
-        int prev_p=0;
-        for( int b = 0; b < NumofBins; ++b){
+        int prev_p=0, cummulative=0;
+        particlesInBin[0] = Bins[0].size();
+        for( int b = 1; b < NumofBins; ++b){
             particlesInBin[b] = Bins[b].size();
+            binStartsAt[b] = Bins[b-1].size() + cummulative;
+            cummulative += binStartsAt[b];
             //totalSize += particlesInBin[b];
 
             int p;
@@ -252,20 +515,21 @@ int main( int argc, char **argv )
         }
         int totalSize = prev_p;
 
-        void* d_pib;
-        cudaMalloc( &d_pib, sizeof(int) * NumofBins );
-        int* d_particlesInBin = d_pib;
+        void* d_bsa;
+        cudaMalloc( &d_bsa, sizeof(int) * NumofBins );
+        int* d_binStartsAt = d_bsa;
 
-        cudaMemcpy( d_particlesInBin, particlesInBin, sizeof(int) * NumofBins, cudaMemcpyHostToDevice );
+        cudaMemcpy( d_binStartsAt, binStartsAt, sizeof(int) * NumofBins, cudaMemcpyHostToDevice );
 
-        void* B;
-        cudaMalloc( &B, sizeof(int) * totalSize );
+        void* d_B;
+        cudaMalloc( &d_B, sizeof(int) * totalSize );
         int* d_bins = B;
 
         cudaMemcpy( d_bins, bins, sizeof(int) * totalSize, cudaMemcpyHostToDevice );
 
         //int blks = (n + NUM_THREADS - 1) / NUM_THREADS;
-	compute_forces_gpu <<< NumofBins, NUM_THREADS >>> (d_particles, n, d_bins, d_particlesInBin, binsize);
+        dim3 blks(NumofBinsEachSide, NumofBinsEachSide);
+	compute_forces_gpu <<< blks, NUM_THREADS >>> (d_particles, n, d_bins, d_binStartsAt, binsize, NumofBinsEachSide);
         
         //
         //  move particles
@@ -288,7 +552,12 @@ int main( int argc, char **argv )
     printf( "n = %d, simulation time = %g seconds\n", n, simulation_time );
     
     free( particles );
+    free( particlesInBin );
+    free( binStartsAt );
     cudaFree(d_particles);
+    cudaFree(d_bsa);
+    cudaFree(d_B);
+
     if( fsave )
         fclose( fsave );
     
