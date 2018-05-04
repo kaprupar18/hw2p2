@@ -39,6 +39,23 @@ void set_size( int n )
     size = sqrt( density * n );
 }
 
+// bin related functions
+double getSize()
+{
+    return size;
+}
+
+double getBinSize()
+{
+    return cutoff;
+}
+
+int getNumberofBins( double size)
+{
+    // need to round up for partial bins
+    return (int)ceil( size/cutoff );
+}
+
 //
 //  Initialize the particle positions and velocities
 //

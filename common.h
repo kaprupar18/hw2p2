@@ -43,6 +43,13 @@ typedef struct
 double read_timer( );
 
 //
+// bin functions
+//
+double getSize();
+double getBinSize();
+int getNumberofBins(double size);
+
+//
 //  simulation routines
 //
 

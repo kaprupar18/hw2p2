@@ -3,7 +3,9 @@
 #include <assert.h>
 #include <math.h>
 #include <cuda.h>
+#include <iostream>
 #include <vector>
+#include <set>
 
 #include "common.h"
 
@@ -61,332 +63,201 @@ __device__ Bin_Location_t getBinLocation(const int BinIndex, const int NumofBins
     return Temp; 
 }
 
-__global__ void compute_forces_gpu( particle_t &particles, int n, int &bins, int &binStartsAt, double binsize, int NumofBinsEachSide ){
+__global__ void compute_forces_gpu( particle_t* particles, int* bins, int* binHasParticles, double binsize, int NumofBinsEachSide ){
 
-    /*
-        "particles" contains actual particles(structures)
-        "bins" contains index of particles sorted by Bin number
-        "particlesInBin" contains number of particles in each bin; helps traverse "bins"
-        "n" is the number of particles in "particles"
-        "binsize" is maximum binsize in 1-D (geometric-distance-wise) = cutoff
-    */
+    /// Error check not yet done
 
-    // each block computed each bin
+    //
+    //  "particles" contains actual particles(structures)
+    //  "bins" contains index of particles sorted by Bin number
+    //  
+    //  "n" is the number of particles in "particles"
+    //  "binsize" is maximum binsize in 1-D (geometric-distance-wise) = cutoff
+    //
+
+    // each thread computes each bin/particle
 
     // each block computes a bin using 8 neighbors in a common case
 
     // get current block from global to shared memory
-    __shared__ particle_t currentBin[n/2];
-
+    __shared__ particle_t currentBin;
+    __shared__ particle_t neighbors[8];
     // get 8 neighboring blocks from global to shared memory
-    __shared__ particle_t northBin[n/2];
-    __shared__ particle_t southBin[n/2];
-    __shared__ particle_t eastBin[n/2];
-    __shared__ particle_t westBin[n/2];
-    __shared__ particle_t northEastBin[n/2];
-    __shared__ particle_t northWestBin[n/2];
-    __shared__ particle_t southEastBin[n/2];
-    __shared__ particle_t southWestBin[n/2];
+    //__shared__ particle_t northBin;
+    //__shared__ particle_t southBin;
+    //__shared__ particle_t eastBin;
+    //__shared__ particle_t westBin;
+    //__shared__ particle_t northEastBin;
+    //__shared__ particle_t northWestBin;
+    //__shared__ particle_t southEastBin;
+    //__shared__ particle_t southWestBin;
 
     // each thread handles a particle
     int tidx = threadIdx.x + blockIdx.x * blockDim.x;
     int tidy = threadIdx.y + blockIdx.y * blockDim.y;
+    //int tid = tidx * blockDim.x + tidy;
 
     // compute Bin indices
-    int currentBinId = blockIdx * NumofBinsEachSide + blockIdy;
-    int nId = (blockIdx - 1) * NumofBinsEachSide + blockIdy;
-    int sId = (blockIdx + 1) * NumofBinsEachSide + blockIdy;
-    int eId = blockIdx * NumofBinsEachSide + blockIdy + 1;
-    int wId = blockIdx * NumofBinsEachSide + blockIdy - 1;
-    int neId = (blockIdx - 1) * NumofBinsEachSide + blockIdy + 1;
-    int nwId = (blockIdx - 1) * NumofBinsEachSide + blockIdy - 1;
-    int seId = (blockIdx + 1) * NumofBinsEachSide + blockIdy + 1;
-    int swId = (blockIdx + 1) * NumofBinsEachSide + blockIdy - 1;
+    int currentBinId = tidx * blockDim.x + tidy;
+    int nId = (tidx - 1) * blockDim.x + tidy;
+    int sId = (tidx + 1) * blockDim.x + tidy;
+    int eId = tidx * blockDim.x + tidy + 1;
+    int wId = tidx * blockDim.x + tidy - 1;
+    int neId = (tidx - 1) * blockDim.x + tidy + 1;
+    int nwId = (tidx - 1) * blockDim.x + tidy - 1;
+    int seId = (tidx + 1) * blockDim.x + tidy + 1;
+    int swId = (tidx + 1) * blockDim.x + tidy - 1;
+
+    __syncthreads();
+
+    // Return if this bin is empty
+    if(!binHasParticles[currentBinId]){
+        return;
+    }
 
     // get Bin Location on grid
     Bin_Location_t Location = getBinLocation(currentBinId, NumofBinsEachSide, NumofBinsEachSide*NumofBinsEachSide);
 
     // get particles in current bin
-    int particleIndex;
-    for( int p=binStartsAt[currentBinId], store=0; p < binStartsAt[currentBinId+1]; ++p, ++store ){
-        particleIndex = bins[p];
-        currentBin[store] = particles[particleIndex];   // gives particles of current bin
-    }
+    int particleIndex = bins[currentBinId];
+    currentBin = particles[particleIndex];
 
-    int particleIndex;
+    particle_t nullParticle;
+    nullParticle.x = nullParticle.y = nullParticle.vx = nullParticle.vy = nullParticle.ax = nullParticle.ay = -1;
     
+    __syncthreads();
+
     // we are not at an edge or a corner. -- Most common case
     if( (Location.Left | Location.Right | Location.Top | Location.Bottom) == false){
         // get 8 neighbors
-
-        // N
-        for( int p=binStartsAt[nId], store=0; p < binStartsAt[nId+1]; ++p, ++store ){
-            particleIndex = bins[p];
-            northBin[store] = particles[particleIndex];   // gives particles of current bin
-        }
-
-        // S
-        for( int p=binStartsAt[sId], store=0; p < binStartsAt[sId+1]; ++p, ++store ){
-            particleIndex = bins[p];
-            southBin[store] = particles[particleIndex];   // gives particles of current bin
-        }
-
-        // W
-        for( int p=binStartsAt[wId], store=0; p < binStartsAt[wId+1]; ++p, ++store ){
-            particleIndex = bins[p];
-            westBin[store] = particles[particleIndex];   // gives particles of current bin
-        }
-
-        // E
-        for( int p=binStartsAt[eId], store=0; p < binStartsAt[eId+1]; ++p, ++store ){
-            particleIndex = bins[p];
-            eastBin[store] = particles[particleIndex];   // gives particles of current bin
-        }
-
-        // NW
-        for( int p=binStartsAt[nwId], store=0; p < binStartsAt[nwId+1]; ++p, ++store ){
-            particleIndex = bins[p];
-            northWestBin[store] = particles[particleIndex];   // gives particles of current bin
-        }
-
-        // NE
-        for( int p=binStartsAt[neId], store=0; p < binStartsAt[neId+1]; ++p, ++store ){
-            particleIndex = bins[p];
-            northEastBin[store] = particles[particleIndex];   // gives particles of current bin
-        }
-
-        // SE
-        for( int p=binStartsAt[seId], store=0; p < binStartsAt[seId+1]; ++p, ++store ){
-            particleIndex = bins[p];
-            southEastBin[store] = particles[particleIndex];   // gives particles of current bin
-        }
-
-        // SW
-        for( int p=binStartsAt[swId], store=0; p < binStartsAt[swId+1]; ++p, ++store ){
-            particleIndex = bins[p];
-            southWestBin[store] = particles[particleIndex];   // gives particles of current bin
-        }
+        neighbors[0] = particles[bins[nId]];
+        neighbors[1] = particles[bins[sId]];
+        neighbors[2] = particles[bins[eId]];
+        neighbors[3] = particles[bins[wId]];
+        neighbors[4] = particles[bins[neId]];
+        neighbors[5] = particles[bins[seId]];
+        neighbors[6] = particles[bins[swId]];
+        neighbors[7] = particles[bins[nwId]];
     }
     // Top Row
     else if( Location.Top ){
 
-        // S
-        for( int p=binStartsAt[sId], store=0; p < binStartsAt[sId+1]; ++p, ++store ){
-            particleIndex = bins[p];
-            southBin[store] = particles[particleIndex];   // gives particles of current bin
-        }
+        neighbors[0] = particles[bins[sId]];
 
         // most common case for the top row -- Not in a corner.
         if( (Location.Left | Location.Right) == false ){
             // get 4 bins: W, E, SW, SE
-
-            // W
-            for( int p=binStartsAt[wId], store=0; p < binStartsAt[wId+1]; ++p, ++store ){
-                particleIndex = bins[p];
-                westBin[store] = particles[particleIndex];   // gives particles of current bin
-            }
-
-            // E
-            for( int p=binStartsAt[eId], store=0; p < binStartsAt[eId+1]; ++p, ++store ){
-                particleIndex = bins[p];
-                eastBin[store] = particles[particleIndex];   // gives particles of current bin
-            }
-
-            // SE
-            for( int p=binStartsAt[seId], store=0; p < binStartsAt[seId+1]; ++p, ++store ){
-                particleIndex = bins[p];
-                southEastBin[store] = particles[particleIndex];   // gives particles of current bin
-            }
-
-            // SW
-            for( int p=binStartsAt[swId], store=0; p < binStartsAt[swId+1]; ++p, ++store ){
-                particleIndex = bins[p];
-                southWestBin[store] = particles[particleIndex];   // gives particles of current bin
-            }
-
+            neighbors[1] = particles[bins[eId]];
+            neighbors[2] = particles[bins[wId]];
+            neighbors[3] = particles[bins[seId]];
+            neighbors[4] = particles[bins[swId]];
+            
+            neighbors[5] = nullParticle;
+            neighbors[6] = nullParticle;
+            neighbors[7] = nullParticle;
         }
         else if( (!Location.Left) && Location.Right ){
             // get 2 bins: W, SW
+            neighbors[1] = particles[bins[wId]];
+            neighbors[2] = particles[bins[swId]];
 
-            // W
-            for( int p=binStartsAt[wId], store=0; p < binStartsAt[wId+1]; ++p, ++store ){
-                particleIndex = bins[p];
-                westBin[store] = particles[particleIndex];   // gives particles of current bin
-            }
-
-            // SW
-            for( int p=binStartsAt[swId], store=0; p < binStartsAt[swId+1]; ++p, ++store ){
-                particleIndex = bins[p];
-                southWestBin[store] = particles[particleIndex];   // gives particles of current bin
-            }
-
+            neighbors[3] = nullParticle;
+            neighbors[4] = nullParticle;
+            neighbors[5] = nullParticle;
+            neighbors[6] = nullParticle;
+            neighbors[7] = nullParticle;
         }
         else if ( Location.Left && (!Location.Right) ){
             // get 2 bins: E, SE
+            neighbors[1] = particles[bins[eId]];
+            neighbors[2] = particles[bins[seId]];
 
-            // E
-            for( int p=binStartsAt[eId], store=0; p < binStartsAt[eId+1]; ++p, ++store ){
-                particleIndex = bins[p];
-                eastBin[store] = particles[particleIndex];   // gives particles of current bin
-            }
-
-            // SE
-            for( int p=binStartsAt[seId], store=0; p < binStartsAt[seId+1]; ++p, ++store ){
-                particleIndex = bins[p];
-                southEastBin[store] = particles[particleIndex];   // gives particles of current bin
-            }
-
+            neighbors[3] = nullParticle;
+            neighbors[4] = nullParticle;
+            neighbors[5] = nullParticle;
+            neighbors[6] = nullParticle;
+            neighbors[7] = nullParticle;
         }
-
     }
     else if( Location.Bottom ){
 
-        // N
-        for( int p=binStartsAt[nId], store=0; p < binStartsAt[nId+1]; ++p, ++store ){
-            particleIndex = bins[p];
-            northBin[store] = particles[particleIndex];   // gives particles of current bin
-        }
+        neighbors[0] = particles[bins[nId]];
 
         // most common case for the top row -- Not in a corner.
         if((Location.Left | Location.Right) == false){
             // get 4 bins: W, E, NW, NE
+            neighbors[1] = particles[bins[wId]];
+            neighbors[2] = particles[bins[eId]];
+            neighbors[3] = particles[bins[nwId]];
+            neighbors[4] = particles[bins[neId]];
 
-            // W
-            for( int p=binStartsAt[wId], store=0; p < binStartsAt[wId+1]; ++p, ++store ){
-                particleIndex = bins[p];
-                westBin[store] = particles[particleIndex];   // gives particles of current bin
-            }
-
-            // E
-            for( int p=binStartsAt[eId], store=0; p < binStartsAt[eId+1]; ++p, ++store ){
-                particleIndex = bins[p];
-                eastBin[store] = particles[particleIndex];   // gives particles of current bin
-            }
-
-            // NW
-            for( int p=binStartsAt[nwId], store=0; p < binStartsAt[nwId+1]; ++p, ++store ){
-                particleIndex = bins[p];
-                northWestBin[store] = particles[particleIndex];   // gives particles of current bin
-            }
-
-            // NE
-            for( int p=binStartsAt[neId], store=0; p < binStartsAt[neId+1]; ++p, ++store ){
-                particleIndex = bins[p];
-                northEastBin[store] = particles[particleIndex];   // gives particles of current bin
-            }
-
+            neighbors[5] = nullParticle;
+            neighbors[6] = nullParticle;
+            neighbors[7] = nullParticle;
         }
         else if( (!Location.Left) && Location.Right ){
             // get 2 bins: W, NW
+            neighbors[1] = particles[bins[wId]];
+            neighbors[2] = particles[bins[nwId]];
 
-            // W
-            for( int p=binStartsAt[wId], store=0; p < binStartsAt[wId+1]; ++p, ++store ){
-                particleIndex = bins[p];
-                westBin[store] = particles[particleIndex];   // gives particles of current bin
-            }
-
-            // NW
-            for( int p=binStartsAt[nwId], store=0; p < binStartsAt[nwId+1]; ++p, ++store ){
-                particleIndex = bins[p];
-                northWestBin[store] = particles[particleIndex];   // gives particles of current bin
-            }
-
+            neighbors[3] = nullParticle;
+            neighbors[4] = nullParticle;
+            neighbors[5] = nullParticle;
+            neighbors[6] = nullParticle;
+            neighbors[7] = nullParticle;
         }
         else if( Location.Left && (!Location.Right) ){
             // get 2 bins: E, NE
+            neighbors[1] = particles[bins[eId]];
+            neighbors[2] = particles[bins[neId]];
 
-            // E
-            for( int p=binStartsAt[eId], store=0; p < binStartsAt[eId+1]; ++p, ++store ){
-                particleIndex = bins[p];
-                eastBin[store] = particles[particleIndex];   // gives particles of current bin
-            }
-
-            // NE
-            for( int p=binStartsAt[neId], store=0; p < binStartsAt[neId+1]; ++p, ++store ){
-                particleIndex = bins[p];
-                northEastBin[store] = particles[particleIndex];   // gives particles of current bin
-            }
-
+            neighbors[3] = nullParticle;
+            neighbors[4] = nullParticle;
+            neighbors[5] = nullParticle;
+            neighbors[6] = nullParticle;
+            neighbors[7] = nullParticle;
         }
-
     }
     else if(Location.Left){
         // get 5 bins: N, S, E, NE, SE
+        neighbors[0] = particles[bins[nId]];
+        neighbors[1] = particles[bins[sId]];
+        neighbors[2] = particles[bins[eId]];
+        neighbors[3] = particles[bins[neId]];
+        neighbors[4] = particles[bins[seId]];
 
-        // N
-        for( int p=binStartsAt[nId], store=0; p < binStartsAt[nId+1]; ++p, ++store ){
-            particleIndex = bins[p];
-            northBin[store] = particles[particleIndex];   // gives particles of current bin
-        }
-
-        // S
-        for( int p=binStartsAt[sId], store=0; p < binStartsAt[sId+1]; ++p, ++store ){
-            particleIndex = bins[p];
-            southBin[store] = particles[particleIndex];   // gives particles of current bin
-        }
-
-        // E
-        for( int p=binStartsAt[eId], store=0; p < binStartsAt[eId+1]; ++p, ++store ){
-            particleIndex = bins[p];
-            eastBin[store] = particles[particleIndex];   // gives particles of current bin
-        }
-
-        // NE
-        for( int p=binStartsAt[neId], store=0; p < binStartsAt[neId+1]; ++p, ++store ){
-            particleIndex = bins[p];
-            northEastBin[store] = particles[particleIndex];   // gives particles of current bin
-        }
-
-        // SE
-        for( int p=binStartsAt[seId], store=0; p < binStartsAt[seId+1]; ++p, ++store ){
-            particleIndex = bins[p];
-            southEastBin[store] = particles[particleIndex];   // gives particles of current bin
-        }
-
+        neighbors[5] = nullParticle;
+        neighbors[6] = nullParticle;
+        neighbors[7] = nullParticle;
     }
     else if(Location.Right){
         // get 5 bins: N, S, W, NW, SW
+        neighbors[0] = particles[bins[nId]];
+        neighbors[1] = particles[bins[sId]];
+        neighbors[2] = particles[bins[wId]];
+        neighbors[3] = particles[bins[nwId]];
+        neighbors[4] = particles[bins[swId]];
 
-        // N
-        for( int p=binStartsAt[nId], store=0; p < binStartsAt[nId+1]; ++p, ++store ){
-            particleIndex = bins[p];
-            northBin[store] = particles[particleIndex];   // gives particles of current bin
-        }
-
-        // S
-        for( int p=binStartsAt[sId], store=0; p < binStartsAt[sId+1]; ++p, ++store ){
-            particleIndex = bins[p];
-            southBin[store] = particles[particleIndex];   // gives particles of current bin
-        }
-
-        // W
-        for( int p=binStartsAt[wId], store=0; p < binStartsAt[wId+1]; ++p, ++store ){
-            particleIndex = bins[p];
-            westBin[store] = particles[particleIndex];   // gives particles of current bin
-        }
-
-        // NW
-        for( int p=binStartsAt[nwId], store=0; p < binStartsAt[nwId+1]; ++p, ++store ){
-            particleIndex = bins[p];
-            northWestBin[store] = particles[particleIndex];   // gives particles of current bin
-        }
-
-        // SW
-        for( int p=binStartsAt[swId], store=0; p < binStartsAt[swId+1]; ++p, ++store ){
-            particleIndex = bins[p];
-            southWestBin[store] = particles[particleIndex];   // gives particles of current bin
-        }
-
+        neighbors[5] = nullParticle;
+        neighbors[6] = nullParticle;
+        neighbors[7] = nullParticle;
     }
     else{
         printf("Getting another bin case\n");
     }
     ///////////// Bins with particles READY! ///////////////////
 
-
-
-
+    __syncthreads();
+    
+    for( int j = 0 ; j < 8 ; ++j ){
+        if( neighbors[j].x == -1 )
+            return;
+        apply_force_gpu( currentBin, neighbors[j] );
+    }
+    __syncthreads();
+    // shared to global
 }
+
 
 __global__ void move_gpu (particle_t * particles, int n, double size)
 {
@@ -404,6 +275,10 @@ __global__ void move_gpu (particle_t * particles, int n, double size)
     p->vy += p->ay * dt;
     p->x  += p->vx * dt;
     p->y  += p->vy * dt;
+
+    // once the force is applied awesome the accel is zero.
+    p->ax = 0;
+    p->ay = 0;
 
     //
     //  bounce from walls
@@ -469,7 +344,7 @@ int main( int argc, char **argv )
     copy_time = read_timer( ) - copy_time;
 
     int* particlesInBin = (int*) malloc( sizeof(int) * NumofBins );
-    int* binStartsAt = (int*) malloc( sizeof(int) * NumofBins );
+    //int* binStartsAt = (int*) malloc( sizeof(int) * NumofBins );
 
     //
     //  simulate a number of time steps
@@ -483,7 +358,9 @@ int main( int argc, char **argv )
         for(int clear = 0; clear < Bins.size(); clear++ ){
             Bins[clear].clear();
         }
+        //std::cout << NumofBins << " bins cleared" << std::endl;
 
+        std::set<int> BinsWithParticles;
         for(int particleIndex = 0; particleIndex < n; ++particleIndex){
 
             // place particles in bins
@@ -493,18 +370,41 @@ int main( int argc, char **argv )
             int BinNum = BinX + NumofBinsEachSide*BinY;
             
             Bins[BinNum].push_back(particleIndex);
+
+            // store the bin which contain a particle. We will ignore the empty ones
+            BinsWithParticles.insert(BinNum);
         }
 
         /// Beginning conversion from STL to primitives ///
-
+        //std::cout << "Starting vector to linear array conversion" << std::endl;
+        //std::cout << "BinsWithParticles: " << BinsWithParticles.size() << std::endl;
         // Find number of particles in each bin
-        int prev_p=0, cummulative=0;
-        particlesInBin[0] = Bins[0].size();
-        for( int b = 1; b < NumofBins; ++b){
+        int prev_p=0;
+        //particlesInBin[0] = Bins[0].size();
+        int max = 0;
+
+        // Linear array from of Bins[][]
+        int* bins = (int*) malloc( sizeof(int) * n );
+        int* binHasParticles = (int*) malloc( sizeof(int) * NumofBins );
+
+        for( int b = 0; b < NumofBins; ++b){
+            
             particlesInBin[b] = Bins[b].size();
-            binStartsAt[b] = Bins[b-1].size() + cummulative;
-            cummulative += binStartsAt[b];
-            //totalSize += particlesInBin[b];
+            //std::cout << "NumofParticles in bin " << b << ": " << particlesInBin[b] << std::endl;
+            max = particlesInBin[b] > max ? particlesInBin[b] : max;
+
+            //binStartsAt[b] = Bins[b-1].size() + cummulative;
+            //std::cout << "Bin " << b << " starts at: " << binStartsAt[b] << std::endl;
+            //cummulative += binStartsAt[b];
+            
+            // binStartsAt is replaced by binsWithParticles since a bin has one particle or none
+            if(particlesInBin[b] != 0){
+                // bin has particle(s)
+                binHasParticles[b] = true;    // store binId
+            }
+            else{
+                binHasParticles[b] = false;
+            }
 
             int p;
             // prepare bins array from 2d Bins vector
@@ -512,29 +412,32 @@ int main( int argc, char **argv )
                 bins[prev_p + p] = Bins[b].at(p);
             }
             prev_p += p;
+
         }
-        int totalSize = prev_p;
-
-        void* d_bsa;
-        cudaMalloc( &d_bsa, sizeof(int) * NumofBins );
-        int* d_binStartsAt = d_bsa;
-
+        //std::cout << "Params: \nmax = " << max << "\ntotalSize = " << n << std::endl; 
+/*
+        int* d_binStartsAt;
+        cudaMalloc( (void**) &d_binStartsAt, sizeof(int) * NumofBins );
         cudaMemcpy( d_binStartsAt, binStartsAt, sizeof(int) * NumofBins, cudaMemcpyHostToDevice );
+*/
 
-        void* d_B;
-        cudaMalloc( &d_B, sizeof(int) * totalSize );
-        int* d_bins = B;
+        int* d_binHasParticles;
+        cudaMalloc( (void**) &d_binHasParticles, sizeof(int) * NumofBins );
+        cudaMemcpy( d_binHasParticles, binHasParticles, sizeof(int) * NumofBins, cudaMemcpyHostToDevice );
 
-        cudaMemcpy( d_bins, bins, sizeof(int) * totalSize, cudaMemcpyHostToDevice );
+        int* d_bins;
+        cudaMalloc( (void**) &d_bins, sizeof(int) * n );
+        cudaMemcpy( d_bins, bins, sizeof(int) * n, cudaMemcpyHostToDevice );
 
         //int blks = (n + NUM_THREADS - 1) / NUM_THREADS;
-        dim3 blks(NumofBinsEachSide, NumofBinsEachSide);
-	compute_forces_gpu <<< blks, NUM_THREADS >>> (d_particles, n, d_bins, d_binStartsAt, binsize, NumofBinsEachSide);
+        dim3 blks(1);
+        dim3 tds(NumofBinsEachSide, NumofBinsEachSide);
+	//compute_forces_gpu <<< blks, tds >>> (d_particles, d_bins, d_binHasParticles, binsize, NumofBinsEachSide);
         
         //
         //  move particles
         //
-	move_gpu <<< blks, NUM_THREADS >>> (d_particles, n, size);
+	//move_gpu <<< blks, NUM_THREADS >>> (d_particles, n, size);
         
         //
         //  save if necessary
@@ -543,7 +446,12 @@ int main( int argc, char **argv )
 	    // Copy the particles back to the CPU
             cudaMemcpy(particles, d_particles, n * sizeof(particle_t), cudaMemcpyDeviceToHost);
             save( fsave, n, particles);
-	}
+        }
+
+        free(bins);
+        free(binHasParticles);
+        cudaFree(d_bins);
+        cudaFree(d_binHasParticles);
     }
     cudaThreadSynchronize();
     simulation_time = read_timer( ) - simulation_time;
@@ -553,10 +461,8 @@ int main( int argc, char **argv )
     
     free( particles );
     free( particlesInBin );
-    free( binStartsAt );
+    //free( binStartsAt );
     cudaFree(d_particles);
-    cudaFree(d_bsa);
-    cudaFree(d_B);
 
     if( fsave )
         fclose( fsave );

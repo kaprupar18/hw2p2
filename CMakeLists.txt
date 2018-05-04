@@ -22,8 +22,8 @@ set(SOURCES
     #common.cpp
 )
 
-CUDA_ADD_EXECUTABLE(matrix ${HEADERS} matrix.cu common.cu ${CUDA_LIBRARIES})
-target_link_libraries(matrix)
+#CUDA_ADD_EXECUTABLE(matrix ${HEADERS} matrix.cu common.cu ${CUDA_LIBRARIES})
+#target_link_libraries(matrix)
 
 CUDA_ADD_EXECUTABLE(serial ${HEADERS} serial.cu common.cu ${CUDA_LIBRARIES})
 target_link_libraries( serial)
