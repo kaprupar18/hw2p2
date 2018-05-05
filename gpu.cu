@@ -70,7 +70,7 @@ __global__ void compute_forces_gpu( particle_t* particles, int* bins, int* binHa
     //
     //  "particles" contains actual particles(structures)
     //  "bins" contains index of particles sorted by Bin number
-    //  
+    //  "binHasParticles" is true if currentBin has particle(s)
     //  "n" is the number of particles in "particles"
     //  "binsize" is maximum binsize in 1-D (geometric-distance-wise) = cutoff
     //
@@ -82,22 +82,17 @@ __global__ void compute_forces_gpu( particle_t* particles, int* bins, int* binHa
     // get current block from global to shared memory
     __shared__ particle_t currentBin;
     __shared__ particle_t neighbors[8];
-    // get 8 neighboring blocks from global to shared memory
-    //__shared__ particle_t northBin;
-    //__shared__ particle_t southBin;
-    //__shared__ particle_t eastBin;
-    //__shared__ particle_t westBin;
-    //__shared__ particle_t northEastBin;
-    //__shared__ particle_t northWestBin;
-    //__shared__ particle_t southEastBin;
-    //__shared__ particle_t southWestBin;
 
     // each thread handles a particle
     int tidx = threadIdx.x + blockIdx.x * blockDim.x;
     int tidy = threadIdx.y + blockIdx.y * blockDim.y;
     //int tid = tidx * blockDim.x + tidy;
 
-    // compute Bin indices
+    if( tidx > NumofBinsEachSide-1 || tidy > NumofBinsEachSide-1 ){
+        return;
+    }
+
+    // compute Bin indices...............CHECKED
     int currentBinId = tidx * blockDim.x + tidy;
     int nId = (tidx - 1) * blockDim.x + tidy;
     int sId = (tidx + 1) * blockDim.x + tidy;
@@ -119,8 +114,7 @@ __global__ void compute_forces_gpu( particle_t* particles, int* bins, int* binHa
     Bin_Location_t Location = getBinLocation(currentBinId, NumofBinsEachSide, NumofBinsEachSide*NumofBinsEachSide);
 
     // get particles in current bin
-    int particleIndex = bins[currentBinId];
-    currentBin = particles[particleIndex];
+    currentBin = particles[bins[currentBinId]];
 
     particle_t nullParticle;
     nullParticle.x = nullParticle.y = nullParticle.vx = nullParticle.vy = nullParticle.ax = nullParticle.ay = -1;
@@ -253,9 +247,14 @@ __global__ void compute_forces_gpu( particle_t* particles, int* bins, int* binHa
         if( neighbors[j].x == -1 )
             return;
         apply_force_gpu( currentBin, neighbors[j] );
+        __syncthreads();
     }
     __syncthreads();
+    
     // shared to global
+    particles[bins[currentBinId]] = currentBin;
+
+    __syncthreads();
 }
 
 
@@ -430,15 +429,25 @@ int main( int argc, char **argv )
         cudaMemcpy( d_bins, bins, sizeof(int) * n, cudaMemcpyHostToDevice );
 
         //int blks = (n + NUM_THREADS - 1) / NUM_THREADS;
-        dim3 blks(1);
-        dim3 tds(NumofBinsEachSide, NumofBinsEachSide);
-	//compute_forces_gpu <<< blks, tds >>> (d_particles, d_bins, d_binHasParticles, binsize, NumofBinsEachSide);
-        
+        dim3 blks(n/1000);
+        int v = NumofBinsEachSide;
+        v--;
+        v |= v >> 1;
+        v |= v >> 2;
+        v |= v >> 4;
+        v |= v >> 8;
+        v |= v >> 16;
+        v++;
+        dim3 tds(v, v);
+        dim3 thr(128,128);
+        cudaThreadSynchronize();
+	compute_forces_gpu <<< blks, tds >>> (d_particles, d_bins, d_binHasParticles, binsize, NumofBinsEachSide);
+        cudaThreadSynchronize();
         //
         //  move particles
         //
-	//move_gpu <<< blks, NUM_THREADS >>> (d_particles, n, size);
-        
+	move_gpu <<< blks, tds >>> (d_particles, n, size);
+        cudaThreadSynchronize();
         //
         //  save if necessary
         //
