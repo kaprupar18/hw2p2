@@ -313,7 +313,9 @@ int main( int argc, char **argv )
     int NumofBinsEachSide = getNumberofBins(size);
     int NumofBins = NumofBinsEachSide*NumofBinsEachSide;
     
+    
     double binsize = getBinSize();
+    printf("NumofBins = %d, binsize = %f\n", NumofBins, binsize);
 
     std::vector< std::vector<int> > Bins(NumofBins, std::vector<int>(0));
 
@@ -418,12 +420,12 @@ int main( int argc, char **argv )
         dim3 tds(v, v);
 
         cudaThreadSynchronize();
-	compute_forces_gpu <<< blks, tds >>> (d_particles, d_bins, d_binHasParticles, binsize, NumofBinsEachSide);
+	    compute_forces_gpu <<< blks, tds >>> (d_particles, d_bins, d_binHasParticles, binsize, NumofBinsEachSide);
         cudaThreadSynchronize();
         //
         //  move particles
         //
-	move_gpu <<< blks, tds >>> (d_particles, n, size);
+	    move_gpu <<< blks, tds >>> (d_particles, n, size);
         cudaThreadSynchronize();
         //
         //  save if necessary
@@ -432,6 +434,8 @@ int main( int argc, char **argv )
 	    // Copy the particles back to the CPU
             cudaMemcpy(particles, d_particles, n * sizeof(particle_t), cudaMemcpyDeviceToHost);
             save( fsave, n, particles);
+        } else {
+        	cudaMemcpy(particles, d_particles, n * sizeof(particle_t), cudaMemcpyDeviceToHost);
         }
 
         free(bins);
