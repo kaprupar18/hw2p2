@@ -36,20 +36,6 @@ __device__ void apply_force_gpu(particle_t &particle, particle_t &neighbor)
 
 }
 
-/*
-__global__ void compute_forces_gpu(particle_t * particles, int n)
-{
-  // Get thread (particle) ID
-  int tid = threadIdx.x + blockIdx.x * blockDim.x;
-  if(tid >= n) return;
-
-  particles[tid].ax = particles[tid].ay = 0;
-  for(int j = 0 ; j < n ; j++)
-    apply_force_gpu(particles[tid], particles[j]);
-
-}
-*/
-
 __device__ Bin_Location_t getBinLocation(const int BinIndex, const int NumofBinsEachSide, const int NumofBins )
 { // assumes square geomerty!
 
@@ -65,8 +51,6 @@ __device__ Bin_Location_t getBinLocation(const int BinIndex, const int NumofBins
 
 __global__ void compute_forces_gpu( particle_t* particles, int* bins, int* binHasParticles, double binsize, int NumofBinsEachSide ){
 
-    /// Error check not yet done
-
     //
     //  "particles" contains actual particles(structures)
     //  "bins" contains index of particles sorted by Bin number
@@ -75,7 +59,7 @@ __global__ void compute_forces_gpu( particle_t* particles, int* bins, int* binHa
     //  "binsize" is maximum binsize in 1-D (geometric-distance-wise) = cutoff
     //
 
-    // each thread computes each bin/particle
+    // each thread computes each bin(particle)
 
     // each block computes a bin using 8 neighbors in a common case
 
@@ -343,8 +327,7 @@ int main( int argc, char **argv )
     copy_time = read_timer( ) - copy_time;
 
     int* particlesInBin = (int*) malloc( sizeof(int) * NumofBins );
-    //int* binStartsAt = (int*) malloc( sizeof(int) * NumofBins );
-
+    
     //
     //  simulate a number of time steps
     //
@@ -391,10 +374,6 @@ int main( int argc, char **argv )
             particlesInBin[b] = Bins[b].size();
             //std::cout << "NumofParticles in bin " << b << ": " << particlesInBin[b] << std::endl;
             max = particlesInBin[b] > max ? particlesInBin[b] : max;
-
-            //binStartsAt[b] = Bins[b-1].size() + cummulative;
-            //std::cout << "Bin " << b << " starts at: " << binStartsAt[b] << std::endl;
-            //cummulative += binStartsAt[b];
             
             // binStartsAt is replaced by binsWithParticles since a bin has one particle or none
             if(particlesInBin[b] != 0){
@@ -414,11 +393,6 @@ int main( int argc, char **argv )
 
         }
         //std::cout << "Params: \nmax = " << max << "\ntotalSize = " << n << std::endl; 
-/*
-        int* d_binStartsAt;
-        cudaMalloc( (void**) &d_binStartsAt, sizeof(int) * NumofBins );
-        cudaMemcpy( d_binStartsAt, binStartsAt, sizeof(int) * NumofBins, cudaMemcpyHostToDevice );
-*/
 
         int* d_binHasParticles;
         cudaMalloc( (void**) &d_binHasParticles, sizeof(int) * NumofBins );
@@ -428,8 +402,10 @@ int main( int argc, char **argv )
         cudaMalloc( (void**) &d_bins, sizeof(int) * n );
         cudaMemcpy( d_bins, bins, sizeof(int) * n, cudaMemcpyHostToDevice );
 
-        //int blks = (n + NUM_THREADS - 1) / NUM_THREADS;
-        dim3 blks(n/1000);
+        int val = (n<1000) ? 1 : (n/1000);
+        dim3 blks(val);
+        
+        // v is NumofBinsEachSide rounded to the next power of 2
         int v = NumofBinsEachSide;
         v--;
         v |= v >> 1;
@@ -438,8 +414,9 @@ int main( int argc, char **argv )
         v |= v >> 8;
         v |= v >> 16;
         v++;
+        
         dim3 tds(v, v);
-        dim3 thr(128,128);
+
         cudaThreadSynchronize();
 	compute_forces_gpu <<< blks, tds >>> (d_particles, d_bins, d_binHasParticles, binsize, NumofBinsEachSide);
         cudaThreadSynchronize();
@@ -470,7 +447,6 @@ int main( int argc, char **argv )
     
     free( particles );
     free( particlesInBin );
-    //free( binStartsAt );
     cudaFree(d_particles);
 
     if( fsave )
