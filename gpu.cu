@@ -404,8 +404,10 @@ int main( int argc, char **argv )
         cudaMalloc( (void**) &d_bins, sizeof(int) * n );
         cudaMemcpy( d_bins, bins, sizeof(int) * n, cudaMemcpyHostToDevice );
 
+        
+        int blkThrdRatio = 1;
         int val = (n<1000) ? 1 : (n/1000);
-        dim3 blks(val);
+        dim3 blks(val+blkThrdRatio);
         
         // v is NumofBinsEachSide rounded to the next power of 2
         int v = NumofBinsEachSide;
@@ -418,9 +420,10 @@ int main( int argc, char **argv )
         v++;
         
         dim3 tds(v, v);
+        dim3 tPB(1024/blkThrdRatio);
 
         cudaThreadSynchronize();
-	    compute_forces_gpu <<< blks, tds >>> (d_particles, d_bins, d_binHasParticles, binsize, NumofBinsEachSide);
+	    compute_forces_gpu <<< blks, tPB >>> (d_particles, d_bins, d_binHasParticles, binsize, NumofBinsEachSide);
         cudaThreadSynchronize();
         //
         //  move particles
